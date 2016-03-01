@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"syscall"
+
+	"github.com/kardianos/osext"
 )
 
 // Mark of daemon process - system environment variable _GO_DAEMON=1
@@ -62,7 +63,8 @@ type Context struct {
 
 // Reborn runs second copy of current process in the given context.
 // function executes separate parts of code in child process and parent process
-// and provides demonization of child process. It look similar as the fork-daemonization.
+// and provides demonization of child process. It look similar as the
+// fork-daemonization, but goroutine-safe.
 // In success returns *os.Process in parent process and nil in child process.
 // Otherwise returns error.
 func (d *Context) Reborn() (child *os.Process, err error) {
@@ -70,6 +72,20 @@ func (d *Context) Reborn() (child *os.Process, err error) {
 		child, err = d.parent()
 	} else {
 		err = d.child()
+	}
+	return
+}
+
+// Search search daemons process by given in context pid file name.
+// If success returns pointer on daemons os.Process structure,
+// else returns error. Returns nil if filename is empty.
+func (d *Context) Search() (daemon *os.Process, err error) {
+	if len(d.PidFileName) > 0 {
+		var pid int
+		if pid, err = ReadPidFile(d.PidFileName); err != nil {
+			return
+		}
+		daemon, err = os.FindProcess(pid)
 	}
 	return
 }
@@ -86,20 +102,6 @@ func (d *Context) parent() (child *os.Process, err error) {
 
 	defer d.closeFiles()
 	if err = d.openFiles(); err != nil {
-		if err == ErrWouldBlock && len(d.PidFileName) > 0 {
-			var (
-				pid  int
-				err1 error
-			)
-			if pid, err1 = d.pidFile.ReadPid(); err1 != nil {
-				err = err1
-				return
-			}
-			if child, err1 = os.FindProcess(pid); err1 != nil {
-				err = err1
-				return
-			}
-		}
 		return
 	}
 
@@ -179,7 +181,7 @@ func (d *Context) closeFiles() (err error) {
 }
 
 func (d *Context) prepareEnv() (err error) {
-	if d.abspath, err = filepath.Abs(os.Args[0]); err != nil {
+	if d.abspath, err = osext.Executable(); err != nil {
 		return
 	}
 
